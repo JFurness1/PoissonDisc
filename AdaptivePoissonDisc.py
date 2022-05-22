@@ -20,7 +20,7 @@ class AdaptivePoissonSamples:
     
 
         self.EPSILON = 1e-4
-        self.CELL_SIZE = self.R_MAX/np.sqrt(2)  # divided by sqrt[dimension]
+        self.CELL_SIZE = self.R_MIN/np.sqrt(2)  # divided by sqrt[dimension]
         self.N_CELLS = int(1.0/self.CELL_SIZE)
         self.K = 30
         self.IMPROVED_SAMPLING = False
@@ -61,10 +61,11 @@ class AdaptivePoissonSamples:
                 if self.is_valid_sample(sample):
                     self.samples.append(sample)
                     active.append(len(self.samples) - 1)
-                    sample_idx = self.get_grid_indices(sample)
-                    self.grid[sample_idx[0]][sample_idx[1]].append(self.samples[-1])
+                    sample_grid_idx = self.get_grid_indices(sample)
+                    self.grid[sample_grid_idx[0]][sample_grid_idx[1]].append(self.samples[-1])
                     success = True
-                    # self.plotit(active=active)
+                    if len(self.samples)%7 == 0:
+                        self.plotit(active=active)
                     break
             if not success:
                 del active[active_idx]
@@ -75,11 +76,11 @@ class AdaptivePoissonSamples:
     def is_valid_sample(self, sample):
         if sample.x < 0 or sample.x > 1.0 or sample.y < 0 or sample.y > 1.0:
             return False
-        grid_idx = self.get_grid_indices(sample)
-        for dx in range(grid_idx[0] - 2, grid_idx[0] + 3):
+        grid_idx_min, grid_idx_max = self.get_grid_bounds(sample)
+        for dx in range(grid_idx_min[0], grid_idx_max[0] + 1):
             if dx < 0 or dx > self.N_CELLS - 1:
                 continue
-            for dy in range(grid_idx[1] - 2, grid_idx[1] + 3):
+            for dy in range(grid_idx_min[1], grid_idx_max[1] + 1):
                 if dy < 0 or dy > self.N_CELLS - 1:
                     continue
                 for other in self.grid[dx][dy]:
@@ -88,9 +89,14 @@ class AdaptivePoissonSamples:
         return True
     
     def get_grid_indices(self, sample):
-        return (max(0, min(int(sample.x//self.CELL_SIZE), len(self.grid) - 1)), 
-                max(0, min(int(sample.y//self.CELL_SIZE), len(self.grid[0]) - 1)))
+        return (max(0, min(int(sample.x//self.CELL_SIZE), self.N_CELLS - 1)), 
+                max(0, min(int(sample.y//self.CELL_SIZE), self.N_CELLS - 1)))
     
+    def get_grid_bounds(self, sample):
+        min_indices = self.get_grid_indices(Sample(sample.x - sample.R, sample.y - sample.R, sample.R))
+        max_indices = self.get_grid_indices(Sample(sample.x + sample.R, sample.y + sample.R, sample.R))
+        return min_indices, max_indices
+
     def get_r_value(self, pt):
         return self.R_MIN + self._img_function(pt)*(self.R_MAX - self.R_MIN)
 
@@ -106,6 +112,13 @@ class AdaptivePoissonSamples:
             r = R + rng()*R
         return r*np.cos(theta), r*np.sin(theta)
 
+    def _add_to_all_cells(self, sample):
+        min_indices, max_indices = self.get_grid_bounds(sample)
+
+        for i in range(min_indices[0], max_indices[0]):
+            for j in range(min_indices[1], max_indices[1]):
+                self.grid[i][j].append(sample)
+
     def plotit(self, query=None, valid=False, active=[]):
         self.ax.cla()
         # self.ax.vlines(np.arange(0, 1, self.CELL_SIZE), 0, 1, colors='gray')
@@ -116,7 +129,7 @@ class AdaptivePoissonSamples:
             # c = self._img_function((s.x, s.y))
             # c = 0
             # self.ax.scatter([s.x], [s.y], color=(0, c, 0), marker='.')
-        self.ax.scatter([s.x for s in self.samples], [s.y for s in self.samples], c='k', marker='.')
+        self.ax.scatter([s.x for s in self.samples], [s.y for s in self.samples], c='k', marker='.',s = 1)
 
         if query is not None:
             if valid:
@@ -135,9 +148,9 @@ class AdaptivePoissonSamples:
     def _img_function(self, pt):
         return self.height_map[int(pt[0]*self.height_map.shape[0]), int(pt[1]*self.height_map.shape[1])]**(2)
 
-img = Image.open("/home/jim/Documents/Poisson Disc/Jim.png", 'r')
+img = Image.open("/home/jim/Documents/Poisson Disc/RexP.png", 'r')
 
-ps = AdaptivePoissonSamples(np.array(ImageOps.grayscale(img)).T/255.0, R_MIN=0.001, R_MAX=0.05)
+ps = AdaptivePoissonSamples(np.array(ImageOps.grayscale(img)).T/255.0, R_MIN=0.002, R_MAX=0.05)
 input('asdasd')
 print("begin...")
 stime = time()
