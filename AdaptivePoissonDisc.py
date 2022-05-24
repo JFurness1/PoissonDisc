@@ -1,3 +1,5 @@
+from email.utils import collapse_rfc2231_value
+import matplotlib
 import numpy as np
 from numpy.random import random as rng
 import matplotlib.pyplot as plt
@@ -11,6 +13,13 @@ class Sample:
         self.y = y
         self.R = R
 
+        self.color = matplotlib.colors.hsv_to_rgb((rng(),1.0,rng()))
+    
+        self.connections = set()
+
+    def set_index(self, index):
+        self.index = index
+
 class AdaptivePoissonSamples:
     def __init__(self, height_map, N_SAMPLES: int = 10000, R_MIN: float = 0.005, R_MAX: float = 0.04, ax = None, color='k'):
         self.height_map = height_map
@@ -21,7 +30,7 @@ class AdaptivePoissonSamples:
 
         self.EPSILON = 1e-4
         self.CELL_SIZE = self.R_MIN/np.sqrt(2)  # divided by sqrt[dimension]
-        self.N_CELLS = int(1.0/self.CELL_SIZE)
+        self.N_CELLS = int(1.0/self.CELL_SIZE) + 1
         self.K = 30
         self.IMPROVED_SAMPLING = False
 
@@ -37,13 +46,12 @@ class AdaptivePoissonSamples:
             self.ax = ax
         self.color = color
         self.ax.axis('equal')
-        plt.ion()
-        plt.show()
         
     def generate(self):
         x = rng()
         y = rng()
         self.samples = [Sample(x, y, self.get_r_value((x, y)))]
+        self.samples[0].set_index(0)
         sample_idx = 0
         active = [sample_idx]
         idx = self.get_grid_indices(self.samples[sample_idx])
@@ -67,9 +75,11 @@ class AdaptivePoissonSamples:
 
                 if self.is_valid_sample(sample):
                     self.samples.append(sample)
+                    sample.set_index(len(self.samples) - 1)
                     active.append(len(self.samples) - 1)
-                    sample_grid_idx = self.get_grid_indices(sample)
-                    self.grid[sample_grid_idx[0]][sample_grid_idx[1]].append(self.samples[-1])
+                    self._add_to_all_cells(sample)
+                    # sample_grid_idx = self.get_grid_indices(sample)
+                    # self.grid[sample_grid_idx[0]][sample_grid_idx[1]].append(self.samples[-1])
                     success = True
                     # if len(self.samples)%7 == 0:
                     #     self.plotit(active=active)
@@ -99,6 +109,9 @@ class AdaptivePoissonSamples:
         return (max(0, min(int(sample.x//self.CELL_SIZE), self.N_CELLS - 1)), 
                 max(0, min(int(sample.y//self.CELL_SIZE), self.N_CELLS - 1)))
     
+    def get_cell_center(self, x, y):
+        return ((x + 0.5)*self.CELL_SIZE, (y + 0.5)*self.CELL_SIZE)
+
     def get_grid_bounds(self, sample):
         min_indices = self.get_grid_indices(Sample(sample.x - sample.R, sample.y - sample.R, sample.R))
         max_indices = self.get_grid_indices(Sample(sample.x + sample.R, sample.y + sample.R, sample.R))
@@ -122,21 +135,33 @@ class AdaptivePoissonSamples:
     def _add_to_all_cells(self, sample):
         min_indices, max_indices = self.get_grid_bounds(sample)
 
-        for i in range(min_indices[0], max_indices[0]):
-            for j in range(min_indices[1], max_indices[1]):
+        for i in range(min_indices[0], max_indices[0] + 1):
+            for j in range(min_indices[1], max_indices[1] + 1):
                 self.grid[i][j].append(sample)
 
     def plotit(self, query=None, valid=False, active=[]):
-        # self.ax.cla()
-        # self.ax.vlines(np.arange(0, 1, self.CELL_SIZE), 0, 1, colors='gray')
-        # self.ax.hlines(np.arange(0, 1, self.CELL_SIZE), 0, 1, colors='gray')
-        # clist = [self._img_function((s.x, s.y)) for s in self.samples]
+        self.ax.vlines([i*self.CELL_SIZE for i in range(self.N_CELLS)], 0, 1, colors='gray')
+        self.ax.hlines([i*self.CELL_SIZE for i in range(self.N_CELLS)], 0, 1, colors='gray')
+        if True:
+            colors = [s.color for s in self.samples]
+        else:
+            colors = 'w'
+        self.ax.scatter([s.x for s in self.samples], [s.y for s in self.samples], 
+                c=colors, marker='o',s = 10)
+
         # for s in self.samples:
-            # self.ax.add_patch(plt.Circle((s.x, s.y), s.R, facecolor=None, ec='k', fill=False))
-            # c = self._img_function((s.x, s.y))
-            # c = 0
-            # self.ax.scatter([s.x], [s.y], color=(0, c, 0), marker='.')
-        self.ax.scatter([s.x for s in self.samples], [s.y for s in self.samples], c=self.color, marker='.',s = 2, alpha=0.6)
+        #     self.ax.add_patch(plt.Circle((s.x, s.y), s.R, facecolor=None, edgecolor=s.color, fill=False))
+
+        cells_x = []
+        cells_y = []
+        cells_c = []
+        for x in range(self.N_CELLS):
+            for y in range(self.N_CELLS):
+                xy = self.get_cell_center(x, y)
+                cells_x.append(xy[0])
+                cells_y.append(xy[1])
+                cells_c.append(self.samples[self.voronoi_grid[x][y]].color)
+        self.ax.scatter(cells_x, cells_y, c=cells_c, marker='x')
 
         if query is not None:
             if valid:
@@ -149,53 +174,42 @@ class AdaptivePoissonSamples:
         self.ax.set_xlim([0, 1])
         self.ax.set_ylim([0, 1])
         self.ax.set_aspect(1.0)
-        plt.draw()
-        plt.pause(0.001)
 
     def _img_function(self, pt):
         return self.height_map[int(pt[0]*self.height_map.shape[0]), int(pt[1]*self.height_map.shape[1])]**(2)
 
     def _fill_approximate_voronoi(self):
+        print("Filling Voronoi")
+        self.voron_colors = np.zeros((self.N_CELLS, self.N_CELLS, 3))
         for i in range(self.N_CELLS):
             for j in range(self.N_CELLS):
                 best = 1e30
+                cell_center = self.get_cell_center(i, j)
                 for entry in self.grid[i][j]:
-                    if self._distance(entry, Sample()) < best:
-                        pass
+                    distance = self._distance(entry, Sample(cell_center[0], cell_center[1], -1))
+                    if distance < best:
+                        best = distance
+                        self.voronoi_grid[i, j] = entry.index
+                        self.voron_colors[i, j] = entry.color
+
+        # self.ax.imshow(self.voron_colors, extent=(0.0, 1.0, 0.0, 1.0))
 
 
 
 img = Image.open("/home/jim/Documents/Poisson Disc/Jim.png", 'r')
 
-
-rgb_array = np.array(img)
-print(rgb_array.shape)
-
-c = (rgb_array[:, :, 0]/255.0).T
-m = (rgb_array[:, :, 1]/255.0).T
-y = (rgb_array[:, :, 2]/255.0).T
 k = np.array(ImageOps.grayscale(img)).T/255.0
 
 fig, ax = plt.subplots(1)
 
-# ksample = AdaptivePoissonSamples(k, R_MIN=0.01, R_MAX=0.05, ax=ax, color='k')
-
-csample = AdaptivePoissonSamples(c, R_MIN=0.0075, R_MAX=0.05, ax=ax, color='r')
-msample = AdaptivePoissonSamples(m, R_MIN=0.0075, R_MAX=0.05, ax=ax, color='g')
-ysample = AdaptivePoissonSamples(y, R_MIN=0.0075, R_MAX=0.05, ax=ax, color='b')
+ksample = AdaptivePoissonSamples(k, R_MIN=0.15, R_MAX=0.15, ax=ax, color='w')
 
 print("begin...")
 stime = time()
-# ksample.generate()
-csample.generate()
-msample.generate()
-ysample.generate()
+ksample.generate()
+ksample._fill_approximate_voronoi()
+ksample.plotit()
 print(f"Generate in {time() - stime}")
-print(f"Made {len(csample.samples)}")
+print(f"Made {len(ksample.samples)}")
 
-plt.ioff()
-# ksample.plotit()
-csample.plotit()
-msample.plotit()
-ysample.plotit()
 plt.show()
