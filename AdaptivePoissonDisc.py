@@ -3,6 +3,7 @@ import matplotlib
 import numpy as np
 from numpy.random import random as rng
 import matplotlib.pyplot as plt
+from matplotlib import collections  as mc
 from PIL import Image, ImageOps
 from time import time
 
@@ -163,6 +164,14 @@ class AdaptivePoissonSamples:
                 cells_c.append(self.samples[self.voronoi_grid[x][y]].color)
         self.ax.scatter(cells_x, cells_y, c=cells_c, marker='x')
 
+        lines = []
+        for s in self.samples:
+            for c in s.connections:
+                lines.append([(s.x, s.y), (c.x, c.y)])
+        lc = mc.LineCollection(lines, colors='k', linewidths=1)
+        ax.add_collection(lc)
+
+
         if query is not None:
             if valid:
                 c = 'g'
@@ -194,6 +203,19 @@ class AdaptivePoissonSamples:
 
         # self.ax.imshow(self.voron_colors, extent=(0.0, 1.0, 0.0, 1.0))
 
+    def build_connections(self):
+        for i in range(self.N_CELLS):
+            for j in range(self.N_CELLS):
+                sample = self.samples[self.voronoi_grid[i][j]]
+                diffs = set([sample])
+                for di in range(max(0, i - 1), min(self.N_CELLS, i + 2)):
+                    for dj in range(max(0, j - 1), min(self.N_CELLS, j + 2)):
+                        diffs.add(self.samples[self.voronoi_grid[di][dj]])
+                diffs.remove(sample)
+                
+                sample.connections = diffs
+                            
+                
 
 
 img = Image.open("/home/jim/Documents/Poisson Disc/Jim.png", 'r')
@@ -207,9 +229,20 @@ ksample = AdaptivePoissonSamples(k, R_MIN=0.15, R_MAX=0.15, ax=ax, color='w')
 print("begin...")
 stime = time()
 ksample.generate()
+print(f"Points generated in {time() - stime}")
+stime = time()
 ksample._fill_approximate_voronoi()
+print(f"Voronoi built in {time() - stime}")
+stime = time()
+ksample.build_connections()
+print(f"Connections made in {time() - stime}")
 ksample.plotit()
-print(f"Generate in {time() - stime}")
 print(f"Made {len(ksample.samples)}")
 
+ksample.ax.set_xlim([-0.1, 1.1])
+ksample.ax.set_ylim([-0.1, 1.1])
 plt.show()
+
+# 0.0221 0.497
+# 0.053 0.5836
+# 0.1328 0.615
