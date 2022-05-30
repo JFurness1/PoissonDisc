@@ -1,4 +1,5 @@
 from email.utils import collapse_rfc2231_value
+from random import sample
 import matplotlib
 import numpy as np
 from numpy.random import random as rng
@@ -17,6 +18,9 @@ class Sample:
         self.color = matplotlib.colors.hsv_to_rgb((rng(),1.0,rng()))
     
         self.connections = set()
+
+        self.triangle_list = []
+        self.triangle_point_indices = []
 
     def set_index(self, index):
         self.index = index
@@ -38,7 +42,7 @@ class AdaptivePoissonSamples:
         self.grid = [[[] for d in range(self.N_CELLS)] for d in range(self.N_CELLS)]
         self.samples = []
 
-        self.voronoi_grid = np.full((self.N_CELLS, self.N_CELLS), -1)
+        self.voronoi_grid = np.full((self.N_CELLS, self.N_CELLS), np.nan, dtype=int)
 
         if ax is None:
             self.fig, self.ax = plt.subplots(1)
@@ -113,6 +117,9 @@ class AdaptivePoissonSamples:
     def get_cell_center(self, x, y):
         return ((x + 0.5)*self.CELL_SIZE, (y + 0.5)*self.CELL_SIZE)
 
+    def get_cell_bottom_left(self, x, y):
+        return x*self.CELL_SIZE, y*self.CELL_SIZE
+
     def get_grid_bounds(self, sample):
         min_indices = self.get_grid_indices(Sample(sample.x - sample.R, sample.y - sample.R, sample.R))
         max_indices = self.get_grid_indices(Sample(sample.x + sample.R, sample.y + sample.R, sample.R))
@@ -141,6 +148,19 @@ class AdaptivePoissonSamples:
                 self.grid[i][j].append(sample)
 
     def plotit(self, query=None, valid=False, active=[]):
+        indices = np.zeros((len(self.triangle_list), 3), dtype=int)
+
+        for i, tri in enumerate(self.triangle_list):
+            for j in range(3):
+                indices[i, j] = tri[j].index
+        x = [s.x for s in self.samples]
+        y = [s.y for s in self.samples]
+        tris = matplotlib.tri.Triangulation(x, y, triangles=indices)
+        self.ax.tripcolor(
+            tris, 
+            facecolors=np.array([0.5 for g in range(len(self.triangle_list))]))
+        self.ax.triplot(tris)
+
         self.ax.vlines([i*self.CELL_SIZE for i in range(self.N_CELLS)], 0, 1, colors='gray')
         self.ax.hlines([i*self.CELL_SIZE for i in range(self.N_CELLS)], 0, 1, colors='gray')
         if True:
@@ -164,14 +184,6 @@ class AdaptivePoissonSamples:
                 cells_c.append(self.samples[self.voronoi_grid[x][y]].color)
         self.ax.scatter(cells_x, cells_y, c=cells_c, marker='x')
 
-        lines = []
-        for s in self.samples:
-            for c in s.connections:
-                lines.append([(s.x, s.y), (c.x, c.y)])
-        lc = mc.LineCollection(lines, colors='k', linewidths=1)
-        ax.add_collection(lc)
-
-
         if query is not None:
             if valid:
                 c = 'g'
@@ -188,24 +200,23 @@ class AdaptivePoissonSamples:
         return self.height_map[int(pt[0]*self.height_map.shape[0]), int(pt[1]*self.height_map.shape[1])]**(2)
 
     def _fill_approximate_voronoi(self):
-        print("Filling Voronoi")
-        self.voron_colors = np.zeros((self.N_CELLS, self.N_CELLS, 3))
         for i in range(self.N_CELLS):
             for j in range(self.N_CELLS):
                 best = 1e30
                 cell_center = self.get_cell_center(i, j)
                 for entry in self.grid[i][j]:
-                    distance = self._distance(entry, Sample(cell_center[0], cell_center[1], -1))
+                    distance = self._distance(entry, Sample(cell_center[0], cell_center[1], np.nan))
                     if distance < best:
                         best = distance
                         self.voronoi_grid[i, j] = entry.index
-                        self.voron_colors[i, j] = entry.color
 
-        # self.ax.imshow(self.voron_colors, extent=(0.0, 1.0, 0.0, 1.0))
 
-    def build_connections(self):
+    def old_build_connections(self):
         for i in range(self.N_CELLS):
             for j in range(self.N_CELLS):
+                if self.voronoi_grid[i][j] == -1:
+                    print("No connections")
+                    continue
                 sample = self.samples[self.voronoi_grid[i][j]]
                 diffs = set([sample])
                 for di in range(max(0, i - 1), min(self.N_CELLS, i + 2)):
@@ -214,6 +225,41 @@ class AdaptivePoissonSamples:
                 diffs.remove(sample)
                 
                 sample.connections = diffs
+    
+    def build_tris(self):
+        self.triangle_list = []
+        for i in range(1, self.N_CELLS):
+            for j in range(1, self.N_CELLS):
+                if np.isnan(self.voronoi_grid[i][j]):
+                    print("No connections")
+                    continue
+                point = self.samples[self.voronoi_grid[i][j]]
+                neighbours = set([
+                    point,
+                    self.samples[self.voronoi_grid[i - 1][j]],
+                    self.samples[self.voronoi_grid[i][j - 1]],
+                    self.samples[self.voronoi_grid[i - 1][j - 1]]
+                    ])
+                
+                if len(neighbours) == 1:
+                    pass
+                elif len(neighbours) == 2:
+                    pass
+                elif len(neighbours) == 3:
+                    self.triangle_list.append(list(neighbours))
+                elif len(neighbours) == 4:
+                    # Should Delaunay check this
+                    plist = list(neighbours)
+                    centroid = self.get_cell_bottom_left(i, j)
+                    plist = sorted(plist, key = lambda p: np.arctan2(p.y - centroid[1], p.x - centroid[0]))
+                    self.triangle_list.append(plist[1:])
+                    self.triangle_list.append([plist[3]] + plist[:2])
+                else:
+                    raise Exception("panic! More than 4 neighbours")
+
+
+
+
                             
                 
 
@@ -234,7 +280,7 @@ stime = time()
 ksample._fill_approximate_voronoi()
 print(f"Voronoi built in {time() - stime}")
 stime = time()
-ksample.build_connections()
+ksample.build_tris()
 print(f"Connections made in {time() - stime}")
 ksample.plotit()
 print(f"Made {len(ksample.samples)}")
