@@ -15,7 +15,7 @@ class Sample:
         self.y = y
         self.R = R
 
-        self.color = matplotlib.colors.hsv_to_rgb((rng(),1.0,rng()))
+        self.color = matplotlib.colors.hsv_to_rgb((rng(),1.0,0.5+rng()/2.0))
     
         self.connections = set()
 
@@ -29,6 +29,9 @@ class AdaptivePoissonSamples:
     def __init__(self, height_map, N_SAMPLES: int = 10000, R_MIN: float = 0.005, R_MAX: float = 0.04, ax = None, color='k'):
         self.height_map = height_map
         self.N_SAMPLES = N_SAMPLES
+
+        assert R_MIN <= R_MAX, "R_MIN must be <= R_MAX"
+
         self.R_MIN = R_MIN
         self.R_MAX = R_MAX
     
@@ -42,7 +45,8 @@ class AdaptivePoissonSamples:
         self.grid = [[[] for d in range(self.N_CELLS)] for d in range(self.N_CELLS)]
         self.samples = []
 
-        self.voronoi_grid = np.full((self.N_CELLS, self.N_CELLS), np.nan, dtype=int)
+        self.voronoi_grid = np.full((self.N_CELLS, self.N_CELLS), np.nan, dtype=int)  # Setting to nan should show up if entry is missing. 
+        self.empty_cell_grid = np.full((self.N_CELLS, self.N_CELLS), True, dtype=bool)
 
         if ax is None:
             self.fig, self.ax = plt.subplots(1)
@@ -53,47 +57,73 @@ class AdaptivePoissonSamples:
         self.ax.axis('equal')
         
     def generate(self):
-        x = rng()
-        y = rng()
-        self.samples = [Sample(x, y, self.get_r_value((x, y)))]
-        self.samples[0].set_index(0)
-        sample_idx = 0
-        active = [sample_idx]
-        idx = self.get_grid_indices(self.samples[sample_idx])
-        self.grid[idx[0]][idx[1]].append(self.samples[0])
+        self.samples = [] 
         
-        while len(active) > 0:
-            active_idx = int(rng()*len(active))
-            sample_idx = active[active_idx]
-            current = self.samples[sample_idx]
+        while np.any(self.empty_cell_grid):
+            possible = []
+            for i in range(self.N_CELLS):
+                for j in range(self.N_CELLS):
+                    if self.empty_cell_grid[i, j]:
+                        possible.append([i, j])
+            point = possible[int(rng()*len(possible))]
             success = False
-            seed = rng()
             for i in range(self.K):
-                modx, mody = self._get_random_displacement(current.R, i, seed)
-                dx = current.x + modx
-                dy = current.y + mody
+                x = min((point[0] + rng())*self.CELL_SIZE, 1.0)
+                y = min((point[1] + rng())*self.CELL_SIZE, 1.0)
 
-                if dx < 0 or dx > 1 or dy < 0 or dy > 1:
-                    continue
-                
-                sample = Sample(dx, dy, self.get_r_value((dx, dy)))
-
-                if self.is_valid_sample(sample):
-                    self.samples.append(sample)
-                    sample.set_index(len(self.samples) - 1)
-                    active.append(len(self.samples) - 1)
-                    self._add_to_all_cells(sample)
-                    # sample_grid_idx = self.get_grid_indices(sample)
-                    # self.grid[sample_grid_idx[0]][sample_grid_idx[1]].append(self.samples[-1])
+                sample_idx = len(self.samples)
+                starter = Sample(x, y, self.get_r_value((x, y)))
+                if not self.is_valid_sample(starter):
+                    print("PROBLEM!")
+                else:
                     success = True
-                    # if len(self.samples)%7 == 0:
-                    #     self.plotit(active=active)
                     break
             if not success:
-                del active[active_idx]
-                
-            if len(self.samples) == self.N_SAMPLES:
-                break
+                self.empty_cell_grid[point[0]][point[1]] = False
+                continue
+
+            self.samples.append(starter)
+            self.samples[sample_idx].set_index(sample_idx)
+            self._add_to_all_cells(starter)
+            active = [sample_idx]
+            idx = self.get_grid_indices(self.samples[sample_idx])
+            self.grid[idx[0]][idx[1]].append(self.samples[0])
+
+            while len(active) > 0:
+                active_idx = int(rng()*len(active))
+                sample_idx = active[active_idx]
+                current = self.samples[sample_idx]
+                success = False
+                seed = rng()
+                for i in range(self.K):
+                    modx, mody = self._get_random_displacement(current.R, i, seed)
+                    dx = current.x + modx
+                    dy = current.y + mody
+
+                    if dx < 0 or dx > 1 or dy < 0 or dy > 1:
+                        continue
+                    
+                    if dx < self.CELL_SIZE and dy < self.CELL_SIZE:
+                        print("In corner")
+
+                    sample = Sample(dx, dy, self.get_r_value((dx, dy)))
+
+                    if self.is_valid_sample(sample):
+                        self.samples.append(sample)
+                        sample.set_index(len(self.samples) - 1)
+                        active.append(len(self.samples) - 1)
+                        self._add_to_all_cells(sample)
+                        # sample_grid_idx = self.get_grid_indices(sample)
+                        # self.grid[sample_grid_idx[0]][sample_grid_idx[1]].append(self.samples[-1])
+                        success = True
+                        # if len(self.samples)%7 == 0:
+                        #     self.plotit(active=active)
+                        break
+                if not success:
+                    del active[active_idx]
+                    
+                if len(self.samples) == self.N_SAMPLES:
+                    break
         
     def is_valid_sample(self, sample):
         if sample.x < 0 or sample.x > 1.0 or sample.y < 0 or sample.y > 1.0:
@@ -111,8 +141,7 @@ class AdaptivePoissonSamples:
         return True
     
     def get_grid_indices(self, sample):
-        return (max(0, min(int(sample.x//self.CELL_SIZE), self.N_CELLS - 1)), 
-                max(0, min(int(sample.y//self.CELL_SIZE), self.N_CELLS - 1)))
+        return (max(0, min(int(sample.x//self.CELL_SIZE), self.N_CELLS - 1)), max(0, min(int(sample.y//self.CELL_SIZE), self.N_CELLS - 1)))
     
     def get_cell_center(self, x, y):
         return ((x + 0.5)*self.CELL_SIZE, (y + 0.5)*self.CELL_SIZE)
@@ -142,10 +171,12 @@ class AdaptivePoissonSamples:
 
     def _add_to_all_cells(self, sample):
         min_indices, max_indices = self.get_grid_bounds(sample)
-
+        if min_indices[0] == min_indices[1] == 0:
+            print("Adding to [0, 0]")
         for i in range(min_indices[0], max_indices[0] + 1):
             for j in range(min_indices[1], max_indices[1] + 1):
                 self.grid[i][j].append(sample)
+                self.empty_cell_grid[i][j] = False
 
     def plotit(self, query=None, valid=False, active=[]):
         indices = np.zeros((len(self.triangle_list), 3), dtype=int)
@@ -161,8 +192,8 @@ class AdaptivePoissonSamples:
             facecolors=np.array([0.5 for g in range(len(self.triangle_list))]))
         self.ax.triplot(tris)
 
-        self.ax.vlines([i*self.CELL_SIZE for i in range(self.N_CELLS)], 0, 1, colors='gray')
-        self.ax.hlines([i*self.CELL_SIZE for i in range(self.N_CELLS)], 0, 1, colors='gray')
+        # self.ax.vlines([i*self.CELL_SIZE for i in range(self.N_CELLS)], 0, 1, colors='gray', lw = 0.5)
+        # self.ax.hlines([i*self.CELL_SIZE for i in range(self.N_CELLS)], 0, 1, colors='gray', lw = 0.5)
         if True:
             colors = [s.color for s in self.samples]
         else:
@@ -173,16 +204,16 @@ class AdaptivePoissonSamples:
         # for s in self.samples:
         #     self.ax.add_patch(plt.Circle((s.x, s.y), s.R, facecolor=None, edgecolor=s.color, fill=False))
 
-        cells_x = []
-        cells_y = []
-        cells_c = []
-        for x in range(self.N_CELLS):
-            for y in range(self.N_CELLS):
-                xy = self.get_cell_center(x, y)
-                cells_x.append(xy[0])
-                cells_y.append(xy[1])
-                cells_c.append(self.samples[self.voronoi_grid[x][y]].color)
-        self.ax.scatter(cells_x, cells_y, c=cells_c, marker='x')
+        # cells_x = []
+        # cells_y = []
+        # cells_c = []
+        # for x in range(self.N_CELLS):
+        #     for y in range(self.N_CELLS):
+        #         xy = self.get_cell_center(x, y)
+        #         cells_x.append(xy[0])
+        #         cells_y.append(xy[1])
+        #         cells_c.append(self.samples[self.voronoi_grid[x][y]].color)
+        # self.ax.scatter(cells_x, cells_y, c=cells_c, marker='x')
 
         if query is not None:
             if valid:
@@ -197,9 +228,10 @@ class AdaptivePoissonSamples:
         self.ax.set_aspect(1.0)
 
     def _img_function(self, pt):
-        return self.height_map[int(pt[0]*self.height_map.shape[0]), int(pt[1]*self.height_map.shape[1])]**(2)
+        return self.height_map[int(pt[0]*(self.height_map.shape[0] - 1)), int(pt[1]*(self.height_map.shape[1]) - 1)]**(2)
 
     def _fill_approximate_voronoi(self):
+
         for i in range(self.N_CELLS):
             for j in range(self.N_CELLS):
                 best = 1e30
@@ -258,19 +290,13 @@ class AdaptivePoissonSamples:
                     raise Exception("panic! More than 4 neighbours")
 
 
-
-
-                            
-                
-
-
-img = Image.open("/home/jim/Documents/Poisson Disc/Jim.png", 'r')
+img = Image.open("/home/jim/Documents/Poisson Disc/RexP.png", 'r')
 
 k = np.array(ImageOps.grayscale(img)).T/255.0
 
 fig, ax = plt.subplots(1)
 
-ksample = AdaptivePoissonSamples(k, R_MIN=0.15, R_MAX=0.15, ax=ax, color='w')
+ksample = AdaptivePoissonSamples(k, R_MIN=0.02, R_MAX=0.1, ax=ax, color='w')
 
 print("begin...")
 stime = time()
@@ -287,6 +313,7 @@ print(f"Made {len(ksample.samples)}")
 
 ksample.ax.set_xlim([-0.1, 1.1])
 ksample.ax.set_ylim([-0.1, 1.1])
+fig.savefig("test.pdf")
 plt.show()
 
 # 0.0221 0.497
